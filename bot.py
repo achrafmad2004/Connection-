@@ -44,7 +44,7 @@ try:
     while True:
         s.sendall(b"action:keepAlive\n")
         print("-> keepAlive sent")
-        time.sleep(3)
+        time.sleep(1)
 except KeyboardInterrupt:
     print("[-] Bot stopped.")
     s.close()
