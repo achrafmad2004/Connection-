@@ -84,7 +84,8 @@ def main():
         # Wait for local proxy (Balatro)
         print(f"[~] Waiting for Balatro to connect on port {RELAY_PORT}...")
         relay = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        relay.bind(("localhost", RELAY_PORT))
+        relay.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        relay.bind(("0.0.0.0", RELAY_PORT))  # ✅ THIS FIX HERE
         relay.listen(1)
         client_sock, addr = relay.accept()
         print(f"[+] Proxy connected from {addr}")
