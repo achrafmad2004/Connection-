@@ -1,47 +1,59 @@
 import socket
 import threading
 
-LOCAL_PORT = 8788
-RELAY_HOST = "trolley.proxy.rlwy.net"
-RELAY_PORT = 18958
+# === CONFIG ===
+BALATRO_HOST = "balatro.virtualized.dev"
+BALATRO_PORT = 8788
+LISTEN_PORT = 18958  # Railway must expose this port
+
+def set_keepalive(sock):
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
 def forward(src, dst, label):
     try:
         while True:
             data = src.recv(4096)
             if not data:
+                print(f"[!] {label} closed.")
                 break
-            print(f"[DATA from {label}] {data!r}")
             dst.sendall(data)
     except Exception as e:
-        print(f"[X] Error forwarding {label} traffic: {e}")
+        print(f"[X] {label} error: {e}")
     finally:
-        src.close()
-        dst.close()
+        try: src.shutdown(socket.SHUT_RDWR); src.close()
+        except: pass
+        try: dst.shutdown(socket.SHUT_RDWR); dst.close()
+        except: pass
+        print(f"[~] {label} forward thread exited.")
 
-def handle_client(client_sock, addr):
-    print(f"[+] Proxy connected from {addr}")
+def handle_client(conn, addr):
+    print(f"[+] Proxy client connected from {addr}")
     try:
-        server_sock = socket.create_connection((RELAY_HOST, RELAY_PORT))
-        threading.Thread(target=forward, args=(client_sock, server_sock, "client")).start()
-        threading.Thread(target=forward, args=(server_sock, client_sock, "server")).start()
-    except Exception as e:
-        print(f"[X] Failed to connect to relay: {e}")
-        client_sock.close()
+        print(f"[~] Connecting to Balatro server for this client...")
+        balatro_sock = socket.create_connection((BALATRO_HOST, BALATRO_PORT))
+        set_keepalive(balatro_sock)
+        print("[✓] Connected to Balatro server.")
 
-def start_proxy():
-    print(f"[+] Proxy listening on port {LOCAL_PORT}, forwarding to {RELAY_HOST}:{RELAY_PORT}...")
+        # Start bidirectional forwarding
+        t1 = threading.Thread(target=forward, args=(conn, balatro_sock, "client→server"))
+        t2 = threading.Thread(target=forward, args=(balatro_sock, conn, "server→client"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+    except Exception as e:
+        print(f"[X] Failed to connect to Balatro: {e}")
+        conn.close()
+
+def wait_for_clients():
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", LOCAL_PORT))
-    listener.listen(5)
-
+    listener.bind(("0.0.0.0", LISTEN_PORT))
+    listener.listen(1)
+    print(f"[✓] Relay ready. Listening on port {LISTEN_PORT} for proxy client...")
     while True:
-        try:
-            client, addr = listener.accept()
-            threading.Thread(target=handle_client, args=(client, addr)).start()
-        except Exception as e:
-            print(f"[X] Error accepting connection: {e}")
+        conn, addr = listener.accept()
+        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
 if __name__ == "__main__":
-    start_proxy()
+    wait_for_clients()
