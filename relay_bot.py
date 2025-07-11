@@ -1,14 +1,11 @@
 import socket
 import threading
 import time
-import os
 
 # === CONFIGURATION ===
 SERVER_HOST = "161.35.252.15"  # Balatro server IP
 SERVER_PORT = 8788
-
-# This port must match your Railway TCP Proxy target (20001)
-RELAY_PORT = int(os.getenv("PORT", 20001))  # use Railway-provided port or fallback
+RELAY_PORT = 20001
 
 USERNAME = "Achraf~1"
 VERSION = "0.2.10-MULTIPLAYER"
@@ -74,24 +71,25 @@ def main():
         print(f"[i] encryptID = {encrypt_id}")
         print("[~] Sending authentication handshake...")
 
+        # Handshake
         s.sendall(f"action:username,username:{USERNAME},modHash:\n".encode())
         s.sendall(f"action:version,version:{VERSION}\n".encode())
         s.sendall(f"action:username,username:{USERNAME},modHash:{mod_hash}\n".encode())
         print("[→] Sent handshake.")
         print("[✓] Auth sent.")
 
-        # Start keepAlive pinger
+        # Start background keepAlive loop
         threading.Thread(target=send_keep_alive_loop, args=(s,), daemon=True).start()
 
-        # Wait for proxy (Balatro) to connect to this cloud bot
+        # Wait for local proxy (Balatro)
         print(f"[~] Waiting for Balatro to connect on port {RELAY_PORT}...")
         relay = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        relay.bind(("0.0.0.0", RELAY_PORT))
+        relay.bind(("localhost", RELAY_PORT))
         relay.listen(1)
         client_sock, addr = relay.accept()
         print(f"[+] Proxy connected from {addr}")
-        print("[✓] Relay is running and keeping session alive.")
 
+        print("[✓] Relay is running and keeping session alive.")
         relay_handler(client_sock, s)
 
     except Exception as e:
