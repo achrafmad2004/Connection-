@@ -14,7 +14,7 @@ client_lock = threading.Lock()
 def set_keepalive(sock):
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     try:
-        sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 10000, 3000))  # Windows-specific
+        sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 10000, 3000))  # Windows only
     except AttributeError:
         pass
 
@@ -29,19 +29,13 @@ def forward(src, dst, label):
     except Exception as e:
         print(f"[X] Forwarding error ({label}): {e}")
     finally:
+        try: src.shutdown(socket.SHUT_RDWR); src.close()
+        except: pass
+        try: dst.shutdown(socket.SHUT_RDWR); dst.close()
+        except: pass
         with client_lock:
             global client_conn
             client_conn = None
-        try:
-            src.shutdown(socket.SHUT_RDWR)
-            src.close()
-        except:
-            pass
-        try:
-            dst.shutdown(socket.SHUT_RDWR)
-            dst.close()
-        except:
-            pass
 
 def wait_for_client(listener_sock):
     global client_conn
@@ -50,16 +44,16 @@ def wait_for_client(listener_sock):
         with client_lock:
             if client_conn:
                 print(f"[!] Replacing old client connection from {addr}")
-                try:
-                    client_conn.shutdown(socket.SHUT_RDWR)
-                    client_conn.close()
-                except:
-                    pass
+                try: client_conn.shutdown(socket.SHUT_RDWR); client_conn.close()
+                except: pass
             client_conn = conn
         print(f"[+] Proxy client connected from {addr}")
+        # Start forwarding as soon as a new client connects
+        threading.Thread(target=forward, args=(client_conn, balatro_sock, "client→server"), daemon=True).start()
+        threading.Thread(target=forward, args=(balatro_sock, client_conn, "server→client"), daemon=True).start()
 
 def start_relay():
-    global client_conn
+    global balatro_sock
 
     # === Step 1: Connect to Balatro server and keep it open
     while True:
@@ -80,20 +74,8 @@ def start_relay():
     listener.listen(1)
     print(f"[✓] Relay ready. Listening on port {LISTEN_PORT} for proxy client...")
 
-    threading.Thread(target=wait_for_client, args=(listener,), daemon=True).start()
-
-    # === Step 3: Main loop to forward when a client connects
-    while True:
-        if client_conn:
-            print("[~] Proxy client connected. Starting forwarding.")
-            try:
-                # Forward both directions
-                threading.Thread(target=forward, args=(client_conn, balatro_sock, "client→server"), daemon=True).start()
-                forward(balatro_sock, client_conn, "server→client")
-            except Exception as e:
-                print(f"[X] Relay error: {e}")
-        else:
-            time.sleep(1)  # Wait until a client connects
+    # === Step 3: Accept client and forward
+    wait_for_client(listener)
 
 if __name__ == "__main__":
     start_relay()
