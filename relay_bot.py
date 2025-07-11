@@ -2,10 +2,9 @@ import socket
 import threading
 import time
 
-# === CONFIGURATION ===
-BALATRO_SERVER_HOST = "161.35.252.15"
-BALATRO_SERVER_PORT = 8788
-RELAY_LISTEN_PORT = 20001  # This stays 20001, Railway TCP proxy will point here
+SERVER_HOST = "161.35.252.15"
+SERVER_PORT = 8788
+RELAY_PORT = 20001
 
 USERNAME = "Achraf~1"
 VERSION = "0.2.11-MULTIPLAYER"
@@ -39,65 +38,53 @@ def send_keep_alive_loop(sock):
             print(f"[X] Keep-alive error: {e}")
             break
 
-def forward(src, dst, tag):
-    try:
-        buffer = b""
-        while True:
-            data = src.recv(4096)
-            if not data:
-                break
-            buffer += data
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
-                print(f"[{tag}] {line}")
-                dst.sendall(line + b"\n")
-    except Exception as e:
-        print(f"[X] Relay error ({tag}): {e}")
-    finally:
+def relay_handler(client_sock, server_sock):
+    def forward(src, dst, tag):
         try:
-            src.shutdown(socket.SHUT_RD)
-        except:
-            pass
-        try:
-            dst.shutdown(socket.SHUT_WR)
-        except:
-            pass
+            while True:
+                data = src.recv(4096)
+                if not data:
+                    break
+                print(f"[{tag}] {data}")
+                dst.sendall(data)
+        except Exception as e:
+            print(f"[X] Relay error ({tag}): {e}")
+        finally:
+            src.close()
+            dst.close()
 
-def handle_connection(balatro_sock, relay_sock):
-    threading.Thread(target=forward, args=(relay_sock, balatro_sock, "Client → Server"), daemon=True).start()
-    threading.Thread(target=forward, args=(balatro_sock, relay_sock, "Server → Client"), daemon=True).start()
+    threading.Thread(target=forward, args=(client_sock, server_sock, "Client → Server")).start()
+    threading.Thread(target=forward, args=(server_sock, client_sock, "Server → Client")).start()
 
 def main():
-    print("[boot] Cloud Relay Bot starting...")
+    print("[boot] Relay bot starting up...")
     try:
-        # Connect to the real Balatro server
-        print(f"[*] Connecting to Balatro server at {BALATRO_SERVER_HOST}:{BALATRO_SERVER_PORT}...")
-        balatro_sock = socket.create_connection((BALATRO_SERVER_HOST, BALATRO_SERVER_PORT))
+        print(f"[*] Connecting to Balatro server at {SERVER_HOST}:{SERVER_PORT}...")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((SERVER_HOST, SERVER_PORT))
         print("[✓] Connected to Balatro server.")
 
-        # Authentication handshake
         encrypt_id = generate_encrypt_id()
         mod_hash = build_mod_hash(encrypt_id)
 
+        print(f"[i] encryptID = {encrypt_id}")
         print("[~] Sending authentication handshake...")
-        balatro_sock.sendall(f"action:username,username:{USERNAME},modHash:\n".encode())
-        balatro_sock.sendall(f"action:version,version:{VERSION}\n".encode())
-        balatro_sock.sendall(f"action:username,username:{USERNAME},modHash:{mod_hash}\n".encode())
+        s.sendall(f"action:username,username:{USERNAME},modHash:\n".encode())
+        s.sendall(f"action:version,version:{VERSION}\n".encode())
+        s.sendall(f"action:username,username:{USERNAME},modHash:{mod_hash}\n".encode())
         print("[→] Sent handshake.")
 
-        # Start keepAlive
-        threading.Thread(target=send_keep_alive_loop, args=(balatro_sock,), daemon=True).start()
+        threading.Thread(target=send_keep_alive_loop, args=(s,), daemon=True).start()
 
-        # Listen for local proxy connection from Railway
-        print(f"[~] Waiting for proxy client on port {RELAY_LISTEN_PORT}...")
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.bind(("0.0.0.0", RELAY_LISTEN_PORT))  # Ensure public binding in Railway
-        listener.listen(1)
-        relay_sock, addr = listener.accept()
+        relay_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        relay_sock.bind(("0.0.0.0", RELAY_PORT))  # CRUCIAL for Railway
+        relay_sock.listen(1)
+
+        print(f"[~] Waiting for Balatro to connect on port {RELAY_PORT}...")
+        client_sock, addr = relay_sock.accept()
         print(f"[+] Proxy connected from {addr}")
-        print("[✓] Relay session established and running.")
-
-        handle_connection(balatro_sock, relay_sock)
+        print("[✓] Relay is running and keeping session alive.")
+        relay_handler(client_sock, s)
 
     except Exception as e:
         print(f"[X] Relay bot error: {e}")
