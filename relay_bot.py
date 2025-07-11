@@ -2,52 +2,53 @@ import socket
 import threading
 import time
 
-LOCAL_PORT = 8788
-RELAY_HOST = "trolley.proxy.rlwy.net"
-RELAY_PORT = 18958
+BALATRO_HOST = "balatro.virtualized.dev"
+BALATRO_PORT = 8788
+RELAY_PORT = 18958  # Port to accept proxy connection
 
-# This runs forever and never closes the relay socket
 def forward_forever(src, dst, label):
     while True:
         try:
             data = src.recv(4096)
             if data:
                 dst.sendall(data)
-        except Exception:
-            pass  # Ignore all errors silently
+        except:
+            pass  # Ignore all errors and keep going
 
-def start_proxy():
+def start_relay():
+    print(f"[+] Connecting to Balatro at {BALATRO_HOST}:{BALATRO_PORT}...")
     try:
-        print(f"[+] Connecting to relay at {RELAY_HOST}:{RELAY_PORT}...")
-        relay_sock = socket.create_connection((RELAY_HOST, RELAY_PORT))
-        print("[✓] Connected to relay. Waiting for Balatro...")
-
-        while True:
-            try:
-                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                listener.bind(("127.0.0.1", LOCAL_PORT))
-                listener.listen(1)
-
-                client_sock, addr = listener.accept()
-                print(f"[✓] Balatro connected from {addr}")
-
-                threading.Thread(target=forward_forever, args=(client_sock, relay_sock, "Balatro→Relay"), daemon=True).start()
-                threading.Thread(target=forward_forever, args=(relay_sock, client_sock, "Relay→Balatro"), daemon=True).start()
-
-                # This part doesn't care about disconnections
-                # Threads exit silently, and we wait for the next game launch
-                time.sleep(1)
-                listener.close()
-
-            except Exception:
-                time.sleep(1)
-
+        balatro_sock = socket.create_connection((BALATRO_HOST, BALATRO_PORT))
+        print("[✓] Connected to Balatro server.")
     except Exception as e:
-        print(f"[X] Fatal: Couldn't connect to relay: {e}")
-        time.sleep(3)
-        start_proxy()  # retry endlessly
+        print(f"[X] Failed to connect to Balatro: {e}")
+        time.sleep(5)
+        return
+
+    # Now we open a server socket to accept the proxy
+    print(f"[+] Relay waiting for proxy connection on port {RELAY_PORT}...")
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("0.0.0.0", RELAY_PORT))
+    listener.listen(1)
+
+    proxy_sock = None
+
+    while True:
+        try:
+            proxy_sock, addr = listener.accept()
+            print(f"[✓] Proxy connected from {addr}")
+
+            threading.Thread(target=forward_forever, args=(proxy_sock, balatro_sock, "Proxy→Balatro"), daemon=True).start()
+            threading.Thread(target=forward_forever, args=(balatro_sock, proxy_sock, "Balatro→Proxy"), daemon=True).start()
+
+            # Just wait for this session to die and re-accept next one
+            while True:
+                time.sleep(60)
+
+        except Exception as e:
+            print(f"[!] Error accepting proxy connection: {e}")
+            time.sleep(2)
 
 if __name__ == "__main__":
-    print(f"[+] Starting Persistent Proxy on port {LOCAL_PORT}")
-    start_proxy()
+    start_relay()
