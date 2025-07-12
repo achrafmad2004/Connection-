@@ -3,101 +3,71 @@ import threading
 import time
 
 # === CONFIG ===
-SERVER_HOST = "161.35.252.15"
-SERVER_PORT = 8788
-RELAY_PORT = 20001
-USERNAME = "Achraf~1"
-VERSION = "0.2.11-MULTIPLAYER"
+LOCAL_PORT = 8788
+RELAY_HOST = "centerbeam.proxy.rlwy.net"
+RELAY_PORT = 12082
+RECONNECT_DELAY = 2  # Delay before retrying relay connection
 
-# === Auth helpers ===
-def generate_encrypt_id():
-    base = 45385400000
-    t = int(time.time() * 1000)
-    simulated_id = base + (t % 100000)
-    return f"{simulated_id}.263"
+# === Forward data ===
+def forward(src, dst, label):
+    try:
+        while True:
+            data = src.recv(4096)
+            if not data:
+                print(f"[~] {label} closed connection.")
+                break
+            print(f"[{label}] {data!r}")
+            dst.sendall(data)
+    except Exception as e:
+        print(f"[X] Forwarding error ({label}): {e}")
+    finally:
+        try: src.close()
+        except: pass
+        try: dst.close()
+        except: pass
 
-def build_mod_hash(encrypt_id):
-    return (
-        f"theOrder=true;"
-        f"unlocked=true;"
-        f"encryptID={encrypt_id};"
-        f"serversideConnectionID=423bca98;"
-        f"FantomsPreview=2.3.0;"
-        f"Multiplayer={VERSION};"
-        f"Saturn=0.2.2-E-ALPHA;"
-        f"Steamodded-1.0.0~BETA-0614a;"
-        f"TheOrder-MultiplayerIntegration"
-    )
+# === Handle Balatro connection ===
+def handle_client(client_sock, addr):
+    print(f"[+] Balatro connected from {addr}")
 
-# === Keep-alive ===
-def keep_alive(sock):
     while True:
         try:
-            sock.sendall(b"action:keepAliveAck\n")
-            print("[KA] Sent keepAliveAck")
-            time.sleep(4)
-        except Exception as e:
-            print(f"[X] Keep-alive error: {e}")
-            break
+            print(f"[~] Connecting to relay at {RELAY_HOST}:{RELAY_PORT}...")
+            relay_sock = socket.create_connection((RELAY_HOST, RELAY_PORT))
+            print("[✓] Connected to relay!")
 
-# === Proxy handler ===
-def handle_proxy_connection(client_sock, server_sock):
-    def forward(src, dst, label):
+            # Start bidirectional forwarding
+            t1 = threading.Thread(target=forward, args=(client_sock, relay_sock, "Balatro → Relay"))
+            t2 = threading.Thread(target=forward, args=(relay_sock, client_sock, "Relay → Balatro"))
+            t1.start()
+            t2.start()
+
+            # Wait for either direction to close
+            t1.join()
+            t2.join()
+
+            print("[~] Disconnected from relay. Retrying soon...")
+            time.sleep(RECONNECT_DELAY)
+
+        except Exception as e:
+            print(f"[X] Failed to connect to relay: {e}")
+            time.sleep(RECONNECT_DELAY)
+
+# === Start local proxy server ===
+def start_proxy():
+    print(f"[=] Proxy listening on 127.0.0.1:{LOCAL_PORT}")
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", LOCAL_PORT))
+    listener.listen(5)
+
+    while True:
         try:
-            while True:
-                data = src.recv(4096)
-                if not data:
-                    break
-                print(f"[{label}] {data!r}")
-                dst.sendall(data)
+            client_sock, addr = listener.accept()
+            threading.Thread(target=handle_client, args=(client_sock, addr)).start()
         except Exception as e:
-            print(f"[X] Forwarding error ({label}): {e}")
-        finally:
-            print(f"[~] Closing {label} direction")
-
-    threading.Thread(target=forward, args=(client_sock, server_sock, "Proxy → Server")).start()
-    threading.Thread(target=forward, args=(server_sock, client_sock, "Server → Proxy")).start()
-
-# === Main ===
-def main():
-    print("[BOOT] Relay starting...")
-
-    # === Step 1: Connect to Balatro server ===
-    try:
-        print(f"[CONNECT] Connecting to Balatro server at {SERVER_HOST}:{SERVER_PORT}...")
-        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_sock.connect((SERVER_HOST, SERVER_PORT))
-        print("[✓] Connected to Balatro server.")
-
-        encrypt_id = generate_encrypt_id()
-        mod_hash = build_mod_hash(encrypt_id)
-
-        # === Authenticate ===
-        server_sock.sendall(f"action:username,username:{USERNAME},modHash:\n".encode())
-        server_sock.sendall(f"action:version,version:{VERSION}\n".encode())
-        server_sock.sendall(f"action:username,username:{USERNAME},modHash:{mod_hash}\n".encode())
-        print("[→] Sent authentication handshake.")
-
-        threading.Thread(target=keep_alive, args=(server_sock,), daemon=True).start()
-
-    except Exception as e:
-        print(f"[X] Failed to connect to Balatro server: {e}")
-        return
-
-    # === Step 2: Accept incoming proxy connections ===
-    try:
-        relay_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        relay_sock.bind(("0.0.0.0", RELAY_PORT))
-        relay_sock.listen(5)
-        print(f"[LISTENING] Relay is ready on port {RELAY_PORT}. Waiting for proxy...")
-
-        while True:
-            client_sock, addr = relay_sock.accept()
-            print(f"[+] Proxy connected from {addr}")
-            threading.Thread(target=handle_proxy_connection, args=(client_sock, server_sock), daemon=True).start()
-
-    except Exception as e:
-        print(f"[X] Relay error: {e}")
+            print(f"[X] Accept error: {e}")
+            time.sleep(1)
 
 if __name__ == "__main__":
-    main()
+    start_proxy()
