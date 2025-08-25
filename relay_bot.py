@@ -7,7 +7,7 @@ SERVER_HOST = "161.35.252.15"
 SERVER_PORT = 8788
 RELAY_PORT = 20001
 USERNAME = "Achraf~1"
-VERSION = "0.2.13-MULTIPLAYER"
+VERSION = "0.2.14-MULTIPLAYER"
 
 # === Auth helpers ===
 def generate_encrypt_id():
@@ -103,5 +103,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
